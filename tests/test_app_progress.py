@@ -16,6 +16,12 @@ class FakeStatus:
         self.messages: list[str] = []
         self.updates: list[dict[str, object]] = []
 
+    def empty(self):
+        return self
+
+    def markdown(self, message: str, unsafe_allow_html: bool = False) -> None:
+        self.messages.append(message)
+
     def write(self, message: str) -> None:
         self.messages.append(message)
 
@@ -31,12 +37,25 @@ class FakeProgress:
         self.values.append(value)
 
 
+class FakeStreamlitLikeProgress(FakeProgress):
+    def __getattr__(self, name: str):
+        def streamlit_generated_method(*args, **kwargs):
+            return None
+
+        return streamlit_generated_method
+
+
 def test_app_uses_visible_status_and_progress_workflow() -> None:
     assert 'st.status("Generating checklist report...", expanded=True)' in APP_SOURCE
     assert "st.progress(0)" in APP_SOURCE
     assert "_update_generation_progress" in APP_SOURCE
     assert "Checklist report generated" in APP_SOURCE
     assert "Checklist report generation failed" in APP_SOURCE
+    assert "stage_status = status.empty()" in APP_SOURCE
+    assert "generation-stage-fade" in APP_SOURCE
+    assert "_advance_generation_progress" in APP_SOURCE
+    assert 'progress_state = {"percent": 0}' in APP_SOURCE
+    assert "GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.08" in APP_SOURCE
     assert "st.spinner" not in APP_SOURCE
 
     for stage in [
@@ -74,6 +93,7 @@ def test_generation_still_defines_the_same_six_report_tabs() -> None:
 
 
 def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
+    monkeypatch.setattr(app, "sleep", lambda seconds: None)
     calls: list[str] = []
 
     def fake_combine(pasted, uploads):
@@ -156,7 +176,24 @@ def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
         "run_similarity_service",
     ]
     assert result["priority"] == "priority"
-    assert progress.values == [8, 12, 20, 32, 44, 58, 70, 80, 88, 96]
+    assert progress.values == list(range(1, 97))
+    assert result["progress_state"] == {"percent": 96}
+    assert len(status.messages) == 9
+    assert all("generation-stage" in message for message in status.messages)
+    assert "Application documents found" not in "\n".join(status.messages)
+    assert "No specific funding call guidance supplied" not in "\n".join(status.messages)
+
+
+def test_smooth_progress_uses_explicit_state_not_streamlit_dynamic_attributes(monkeypatch) -> None:
+    monkeypatch.setattr(app, "sleep", lambda seconds: None)
+    progress = FakeStreamlitLikeProgress()
+    progress_state = {"percent": 0}
+
+    app._advance_generation_progress(progress, 3, progress_state)
+    app._advance_generation_progress(progress, 5, progress_state)
+
+    assert progress.values == [1, 2, 3, 4, 5]
+    assert progress_state == {"percent": 5}
 
 
 def test_similarity_checking_remains_optional_and_privacy_gated() -> None:
