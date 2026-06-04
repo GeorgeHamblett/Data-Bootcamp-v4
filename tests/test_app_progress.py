@@ -42,6 +42,8 @@ def test_app_uses_visible_status_and_progress_workflow() -> None:
     assert "Checklist report generation failed" in APP_SOURCE
     assert "stage_status = status.empty()" in APP_SOURCE
     assert "generation-stage-fade" in APP_SOURCE
+    assert "_advance_generation_progress" in APP_SOURCE
+    assert "GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.04" in APP_SOURCE
     assert "st.spinner" not in APP_SOURCE
 
     for stage in [
@@ -79,6 +81,7 @@ def test_generation_still_defines_the_same_six_report_tabs() -> None:
 
 
 def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
+    monkeypatch.setattr(app, "sleep", lambda seconds: None)
     calls: list[str] = []
 
     def fake_combine(pasted, uploads):
@@ -161,7 +164,8 @@ def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
         "run_similarity_service",
     ]
     assert result["priority"] == "priority"
-    assert progress.values == [8, 12, 20, 32, 44, 58, 70, 80, 88, 96]
+    assert progress.values == list(range(1, 97))
+    assert progress._generation_progress_percent == 96
     assert len(status.messages) == 9
     assert all("generation-stage" in message for message in status.messages)
     assert "Application documents found" not in "\n".join(status.messages)
