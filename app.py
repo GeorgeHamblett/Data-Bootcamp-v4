@@ -1,6 +1,8 @@
 """Streamlit entrypoint for the RSS/NIHR Funding Application Checklist Assistant."""
 from __future__ import annotations
 
+from time import sleep
+
 from application_facts import extract_application_facts
 from checklist_engine import build_checklist
 from document_loader import combine_pasted_and_uploaded
@@ -28,6 +30,7 @@ from similarity.epo_ops import check_epo_credentials
 
 APP_TITLE = "RSS/NIHR Funding Application Checklist Assistant"
 NO_SPECIFIC_CALL_GUIDANCE_MESSAGE = "No specific funding call guidance provided; review uses built-in NIHR domestic guidance and RSS PDA playbook guidance."
+GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.08
 
 
 def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
