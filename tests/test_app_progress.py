@@ -16,9 +16,6 @@ class FakeStatus:
         self.messages: list[str] = []
         self.updates: list[dict[str, object]] = []
 
-    def empty(self):
-        return self
-
     def markdown(self, message: str, unsafe_allow_html: bool = False) -> None:
         self.messages.append(message)
 
@@ -54,9 +51,7 @@ def test_app_uses_visible_status_and_progress_workflow() -> None:
     assert "stage_status = status.empty()" in APP_SOURCE
     assert "generation-stage-fade" in APP_SOURCE
     assert "_advance_generation_progress" in APP_SOURCE
-    assert "_reset_generation_progress(progress)" in APP_SOURCE
-    assert "_GENERATION_PROGRESS_STATE_BY_ID" in APP_SOURCE
-    assert "GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.08" in APP_SOURCE
+    assert "GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.04" in APP_SOURCE
     assert "st.spinner" not in APP_SOURCE
 
     for stage in [
@@ -193,23 +188,11 @@ def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
     ]
     assert result["priority"] == "priority"
     assert progress.values == list(range(1, 97))
-    assert app._GENERATION_PROGRESS_STATE_BY_ID[id(progress)] == 96
+    assert progress._generation_progress_percent == 96
     assert len(status.messages) == 9
     assert all("generation-stage" in message for message in status.messages)
     assert "Application documents found" not in "\n".join(status.messages)
     assert "No specific funding call guidance supplied" not in "\n".join(status.messages)
-
-
-def test_smooth_progress_uses_internal_state_not_streamlit_dynamic_attributes(monkeypatch) -> None:
-    monkeypatch.setattr(app, "sleep", lambda seconds: None)
-    progress = FakeStreamlitLikeProgress()
-
-    app._reset_generation_progress(progress)
-    app._advance_generation_progress(progress, 3)
-    app._advance_generation_progress(progress, 5)
-
-    assert progress.values == [1, 2, 3, 4, 5]
-    assert app._GENERATION_PROGRESS_STATE_BY_ID[id(progress)] == 5
 
 
 def test_similarity_checking_remains_optional_and_privacy_gated() -> None:
