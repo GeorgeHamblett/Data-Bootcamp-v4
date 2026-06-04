@@ -1,6 +1,8 @@
 """Streamlit entrypoint for the RSS/NIHR Funding Application Checklist Assistant."""
 from __future__ import annotations
 
+from time import sleep
+
 from application_facts import extract_application_facts
 from checklist_engine import build_checklist
 from document_loader import combine_pasted_and_uploaded
@@ -28,11 +30,200 @@ from similarity.epo_ops import check_epo_credentials
 
 APP_TITLE = "RSS/NIHR Funding Application Checklist Assistant"
 NO_SPECIFIC_CALL_GUIDANCE_MESSAGE = "No specific funding call guidance provided; review uses built-in NIHR domestic guidance and RSS PDA playbook guidance."
+GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.08
 
 
 def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
     docs = combine_pasted_and_uploaded(pasted, uploads)
     return "\n\n".join(doc.text for doc in docs)
+
+
+def _advance_generation_progress(progress, start_percent: int, target_percent: int, delay_seconds: float) -> int:
+    """Advance the progress bar gradually so users can see each stage unfold."""
+
+    if delay_seconds <= 0 or target_percent <= start_percent:
+        progress.progress(target_percent)
+        return target_percent
+
+    for value in range(start_percent + 1, target_percent + 1):
+        progress.progress(value)
+        sleep(delay_seconds)
+    return target_percent
+
+
+def _update_generation_progress(
+    status,
+    progress,
+    message: str,
+    percent: int,
+    current_percent: int,
+    delay_seconds: float = GENERATION_PROGRESS_STEP_DELAY_SECONDS,
+) -> int:
+    """Write a client-friendly generation update and advance the progress bar."""
+
+    status.write(message)
+    return _advance_generation_progress(progress, current_percent, percent, delay_seconds)
+
+
+def _similarity_progress_message(run_similarity: bool, mock_similarity: bool, settings: Settings) -> str:
+    if not run_similarity:
+        return "Similarity/novelty check skipped because it was not enabled."
+    if mock_similarity:
+        return "Similarity/novelty check running in mock mode for testing; no live external searches are made."
+    if settings.strict_local_only_mode:
+        return "Similarity/novelty check blocked by strict local-only mode; no external searches are made."
+    if not settings.allow_external_similarity_queries:
+        return "Similarity/novelty check blocked by privacy settings; no external searches are made."
+    if not settings.send_only_safe_query_terms:
+        return "Similarity/novelty check blocked because the safe-query-term privacy gate is disabled."
+    return "Similarity/novelty check running live with cleaned concept terms only; no full application text is sent externally."
+
+
+def run_generation_pipeline(
+    *,
+    app_text: str,
+    app_uploads,
+    call_text: str,
+    call_uploads,
+    settings: Settings,
+    run_similarity: bool,
+    mock_similarity: bool,
+    status,
+    progress,
+    progress_delay_seconds: float = GENERATION_PROGRESS_STEP_DELAY_SECONDS,
+) -> dict[str, object]:
+    """Run report generation in visible, client-friendly stages."""
+
+    current_progress = 0
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "1. Reading application documents — combining pasted text and uploaded files.",
+        8,
+        current_progress,
+        progress_delay_seconds,
+    )
+    application_docs = combine_pasted_and_uploaded(app_text, app_uploads)
+    if not application_docs:
+        raise ValueError("The Application is required. Paste text or upload .docx, .pdf, .txt or .xlsx files.")
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "Application documents found. The app will use them locally to build the checklist evidence review.",
+        12,
+        current_progress,
+        progress_delay_seconds,
+    )
+
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "2. Extracting application facts — identifying title, applicant, intervention/product, population, study design, TRL/stage, sample size, endpoints, PPIE, inclusion, health economics, regulatory plan, work packages and uncertainties.",
+        20,
+        current_progress,
+        progress_delay_seconds,
+    )
+    facts = extract_application_facts(application_docs)
+
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "3. Reading optional funding call guidance — combining pasted guidance and uploaded call documents.",
+        32,
+        current_progress,
+        progress_delay_seconds,
+    )
+    specific_text = _runtime_guidance_from_inputs(call_text, call_uploads)
+    if specific_text.strip():
+        status.write("Specific funding call guidance found and will be added to the built-in NIHR/RSS guidance.")
+    else:
+        status.write("No specific funding call guidance supplied; using the built-in NIHR domestic guidance and RSS PDA playbook guidance where relevant.")
+
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "4. Selecting relevant guidance — checking PDA/RSS playbook relevance and building the baseline requirement bank.",
+        44,
+        current_progress,
+        progress_delay_seconds,
+    )
+    include_pda = detects_pda_relevance(
+        specific_text,
+        facts.application_claimed_call,
+        facts.product_or_intervention,
+        facts.technology_type,
+        facts.trl_evidence,
+    )
+    baseline = build_baseline_requirement_bank(".", include_pda_playbook=include_pda)
+    specific_reqs = parse_guidance_text(specific_text, "specific_call", prefix="CALL") if specific_text.strip() else []
+    for req in specific_reqs:
+        req.overrides_general_guidance = True
+
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "5. Building the checklist review — matching application evidence to requirements, flagging missing/weak/contradictory evidence and applying hard validation rules.",
+        58,
+        current_progress,
+        progress_delay_seconds,
+    )
+    checklist = build_checklist(facts, baseline, specific_reqs)
+
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "6. Building the RAG dashboard — summarising Red/Amber/Green performance by review area and collecting validation warnings.",
+        70,
+        current_progress,
+        progress_delay_seconds,
+    )
+    dashboard = build_rag_dashboard(checklist, facts)
+
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "7. Prioritising missing evidence — identifying the highest-priority gaps and recommended next actions.",
+        80,
+        current_progress,
+        progress_delay_seconds,
+    )
+    priority = render_priority_missing_evidence(checklist, dashboard, facts)
+
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        f"8. Running similarity/novelty check — {_similarity_progress_message(run_similarity, mock_similarity, settings)}",
+        88,
+        current_progress,
+        progress_delay_seconds,
+    )
+    similarity = run_similarity_service(
+        facts,
+        settings,
+        run_similarity_check=run_similarity,
+        mock_mode=mock_similarity,
+        snippets=[doc.text[:800] for doc in application_docs],
+    )
+
+    current_progress = _update_generation_progress(
+        status,
+        progress,
+        "9. Preparing report tabs — Summary, Checklist Report, RAG Dashboard, Similarity Check, Priority Missing Evidence and Raw JSON.",
+        96,
+        current_progress,
+        progress_delay_seconds,
+    )
+
+    return {
+        "application_docs": application_docs,
+        "facts": facts,
+        "specific_reqs": specific_reqs,
+        "baseline": baseline,
+        "checklist": checklist,
+        "dashboard": dashboard,
+        "priority": priority,
+        "similarity": similarity,
+    }
 
 
 def main() -> None:
@@ -69,29 +260,41 @@ def main() -> None:
         st.info("Paste or upload the actual application, then generate the checklist report. Built-in .txt files are loaded as guidance, not example applications.")
         return
 
-    application_docs = combine_pasted_and_uploaded(app_text, app_uploads)
-    if not application_docs:
-        st.error("The Application is required. Paste text or upload .docx, .pdf, .txt or .xlsx files.")
+    progress_panel = st.empty()
+    with progress_panel.container():
+        status = st.status("Generating checklist report...", expanded=True)
+        progress = st.progress(0)
+
+    try:
+        generation = run_generation_pipeline(
+            app_text=app_text,
+            app_uploads=app_uploads,
+            call_text=call_text,
+            call_uploads=call_uploads,
+            settings=settings,
+            run_similarity=run_similarity,
+            mock_similarity=mock_similarity,
+            status=status,
+            progress=progress,
+        )
+    except Exception as exc:
+        status.write(f"Generation stopped at this stage: {exc}")
+        status.update(label="Checklist report generation failed", state="error", expanded=True)
+        st.error(f"Checklist report could not be generated. {exc}")
         return
 
-    with st.spinner("Extracting application facts and building checklist..."):
-        facts = extract_application_facts(application_docs)
-        specific_text = _runtime_guidance_from_inputs(call_text, call_uploads)
-        include_pda = detects_pda_relevance(specific_text, facts.application_claimed_call, facts.product_or_intervention, facts.technology_type, facts.trl_evidence)
-        baseline = build_baseline_requirement_bank(".", include_pda_playbook=include_pda)
-        specific_reqs = parse_guidance_text(specific_text, "specific_call", prefix="CALL") if specific_text.strip() else []
-        for req in specific_reqs:
-            req.overrides_general_guidance = True
-        checklist = build_checklist(facts, baseline, specific_reqs)
-        dashboard = build_rag_dashboard(checklist, facts)
-        priority = render_priority_missing_evidence(checklist, dashboard, facts)
-        similarity = run_similarity_service(
-            facts,
-            settings,
-            run_similarity_check=run_similarity,
-            mock_mode=mock_similarity,
-            snippets=[doc.text[:800] for doc in application_docs],
-        )
+    facts = generation["facts"]
+    specific_reqs = generation["specific_reqs"]
+    baseline = generation["baseline"]
+    checklist = generation["checklist"]
+    dashboard = generation["dashboard"]
+    priority = generation["priority"]
+    similarity = generation["similarity"]
+
+    _advance_generation_progress(progress, 96, 100, GENERATION_PROGRESS_STEP_DELAY_SECONDS)
+    status.update(label="Checklist report generated", state="complete", expanded=False)
+    sleep(0.4)
+    progress_panel.empty()
 
     tab_summary, tab_checklist, tab_rag, tab_similarity, tab_priority, tab_raw = st.tabs([
         "Summary",
