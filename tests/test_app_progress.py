@@ -34,6 +34,14 @@ class FakeProgress:
         self.values.append(value)
 
 
+class FakeStreamlitLikeProgress(FakeProgress):
+    def __getattr__(self, name: str):
+        def streamlit_generated_method(*args, **kwargs):
+            return None
+
+        return streamlit_generated_method
+
+
 def test_app_uses_visible_status_and_progress_workflow() -> None:
     assert 'st.status("Generating checklist report...", expanded=True)' in APP_SOURCE
     assert "st.progress(0)" in APP_SOURCE
