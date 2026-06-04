@@ -1,6 +1,7 @@
 """Streamlit entrypoint for the RSS/NIHR Funding Application Checklist Assistant."""
 from __future__ import annotations
 
+from html import escape
 from time import sleep
 
 from application_facts import extract_application_facts
@@ -30,7 +31,7 @@ from similarity.epo_ops import check_epo_credentials
 
 APP_TITLE = "RSS/NIHR Funding Application Checklist Assistant"
 NO_SPECIFIC_CALL_GUIDANCE_MESSAGE = "No specific funding call guidance provided; review uses built-in NIHR domestic guidance and RSS PDA playbook guidance."
-GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.08
+GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.04
 
 
 def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
@@ -38,11 +39,29 @@ def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
     return "\n\n".join(doc.text for doc in docs)
 
 
-def _update_generation_progress(status, progress, message: str, percent: int) -> None:
-    """Write a client-friendly generation update and advance the progress bar."""
+def _advance_generation_progress(progress, percent: int) -> None:
+    """Smoothly advance the generation progress bar to the target percentage."""
 
-    status.write(message)
-    progress.progress(percent)
+    current_percent = getattr(progress, "_generation_progress_percent", 0)
+    if percent <= current_percent:
+        progress.progress(percent)
+        return
+
+    for next_percent in range(current_percent + 1, percent + 1):
+        progress.progress(next_percent)
+        sleep(GENERATION_PROGRESS_STEP_DELAY_SECONDS)
+
+    progress._generation_progress_percent = percent
+
+
+def _update_generation_progress(status, progress, message: str, percent: int) -> None:
+    """Replace the visible generation stage and smoothly advance the progress bar."""
+
+    if hasattr(status, "markdown"):
+        status.markdown(f'<div class="generation-stage">{escape(message)}</div>', unsafe_allow_html=True)
+    else:
+        status.write(message)
+    _advance_generation_progress(progress, percent)
 
 
 def _similarity_progress_message(run_similarity: bool, mock_similarity: bool, settings: Settings) -> str:
@@ -82,12 +101,7 @@ def run_generation_pipeline(
     application_docs = combine_pasted_and_uploaded(app_text, app_uploads)
     if not application_docs:
         raise ValueError("The Application is required. Paste text or upload .docx, .pdf, .txt or .xlsx files.")
-    _update_generation_progress(
-        status,
-        progress,
-        "Application documents found. The app will use them locally to build the checklist evidence review.",
-        12,
-    )
+    _advance_generation_progress(progress, 12)
 
     _update_generation_progress(
         status,
@@ -104,10 +118,6 @@ def run_generation_pipeline(
         32,
     )
     specific_text = _runtime_guidance_from_inputs(call_text, call_uploads)
-    if specific_text.strip():
-        status.write("Specific funding call guidance found and will be added to the built-in NIHR/RSS guidance.")
-    else:
-        status.write("No specific funding call guidance supplied; using the built-in NIHR domestic guidance and RSS PDA playbook guidance where relevant.")
 
     _update_generation_progress(
         status,
@@ -219,6 +229,24 @@ def main() -> None:
         return
 
     status = st.status("Generating checklist report...", expanded=True)
+    status.markdown(
+        """
+        <style>
+        .generation-stage {
+            animation: generation-stage-fade 0.45s ease-in-out;
+            font-size: 1rem;
+            line-height: 1.45;
+            padding: 0.25rem 0;
+        }
+        @keyframes generation-stage-fade {
+            from { opacity: 0; transform: translateY(0.25rem); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    stage_status = status.empty()
     progress = st.progress(0)
 
     try:
@@ -230,7 +258,7 @@ def main() -> None:
             settings=settings,
             run_similarity=run_similarity,
             mock_similarity=mock_similarity,
-            status=status,
+            status=stage_status,
             progress=progress,
         )
     except Exception as exc:
@@ -247,7 +275,7 @@ def main() -> None:
     priority = generation["priority"]
     similarity = generation["similarity"]
 
-    progress.progress(100)
+    _advance_generation_progress(progress, 100)
     status.update(label="Checklist report generated", state="complete", expanded=False)
 
     tab_summary, tab_checklist, tab_rag, tab_similarity, tab_priority, tab_raw = st.tabs([
