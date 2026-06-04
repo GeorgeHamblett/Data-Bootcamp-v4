@@ -11,12 +11,16 @@ from settings import Settings
 APP_SOURCE = Path("app.py").read_text(encoding="utf-8")
 
 
-class FakeStageDisplay:
+class FakeStatus:
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.updates: list[dict[str, object]] = []
 
-    def markdown(self, message: str) -> None:
+    def write(self, message: str) -> None:
         self.messages.append(message)
+
+    def update(self, **kwargs) -> None:
+        self.updates.append(kwargs)
 
 
 class FakeProgress:
@@ -30,12 +34,7 @@ class FakeProgress:
 def test_app_uses_visible_status_and_progress_workflow() -> None:
     assert 'st.status("Generating checklist report...", expanded=True)' in APP_SOURCE
     assert "st.progress(0)" in APP_SOURCE
-    assert "progress_panel = st.empty()" in APP_SOURCE
-    assert "progress_panel.empty()" in APP_SOURCE
-    assert "stage_display = st.empty()" in APP_SOURCE
-    assert "_set_generation_stage" in APP_SOURCE
     assert "_update_generation_progress" in APP_SOURCE
-    assert "status.write" not in APP_SOURCE
     assert "Checklist report generated" in APP_SOURCE
     assert "Checklist report generation failed" in APP_SOURCE
     assert "st.spinner" not in APP_SOURCE
@@ -130,7 +129,7 @@ def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
     monkeypatch.setattr(app, "render_priority_missing_evidence", fake_priority)
     monkeypatch.setattr(app, "run_similarity_service", fake_similarity)
 
-    stage_display = FakeStageDisplay()
+    status = FakeStatus()
     progress = FakeProgress()
     result = app.run_generation_pipeline(
         app_text="application",
@@ -140,9 +139,8 @@ def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
         settings=Settings(),
         run_similarity=False,
         mock_similarity=False,
-        stage_display=stage_display,
+        status=status,
         progress=progress,
-        progress_delay_seconds=0,
     )
 
     assert calls == [
@@ -159,21 +157,6 @@ def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
     ]
     assert result["priority"] == "priority"
     assert progress.values == [8, 12, 20, 32, 44, 58, 70, 80, 88, 96]
-    assert stage_display.messages[-1].startswith("**9. Preparing report tabs")
-    assert all(message.startswith("**") for message in stage_display.messages)
-
-
-def test_progress_can_advance_gradually_with_a_delay(monkeypatch) -> None:
-    sleeps: list[float] = []
-    progress = FakeProgress()
-
-    monkeypatch.setattr(app, "sleep", sleeps.append)
-
-    result = app._advance_generation_progress(progress, 0, 3, 0.08)
-
-    assert result == 3
-    assert progress.values == [1, 2, 3]
-    assert sleeps == [0.08, 0.08, 0.08]
 
 
 def test_similarity_checking_remains_optional_and_privacy_gated() -> None:
@@ -205,5 +188,5 @@ def test_progress_messages_do_not_claim_gdpr_or_display_secret_values() -> None:
     lower_source = APP_SOURCE.lower()
     assert "gdpr compliant" not in lower_source
     assert "api key" not in "\n".join(
-        line.lower() for line in APP_SOURCE.splitlines() if "_set_generation_stage" in line or "_update_generation_progress" in line
+        line.lower() for line in APP_SOURCE.splitlines() if "status.write" in line or "_update_generation_progress" in line
     )
