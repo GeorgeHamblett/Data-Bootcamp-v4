@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from html import escape
 from time import sleep
+from weakref import WeakKeyDictionary
 
 from application_facts import extract_application_facts
 from checklist_engine import build_checklist
@@ -32,6 +33,8 @@ from similarity.epo_ops import check_epo_credentials
 APP_TITLE = "RSS/NIHR Funding Application Checklist Assistant"
 NO_SPECIFIC_CALL_GUIDANCE_MESSAGE = "No specific funding call guidance provided; review uses built-in NIHR domestic guidance and RSS PDA playbook guidance."
 GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.04
+_GENERATION_PROGRESS_PERCENT_BY_OBJECT: WeakKeyDictionary[object, int] = WeakKeyDictionary()
+_GENERATION_PROGRESS_PERCENT_BY_ID: dict[int, int] = {}
 
 
 def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
@@ -39,19 +42,45 @@ def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
     return "\n\n".join(doc.text for doc in docs)
 
 
+def _get_generation_progress_percent(progress) -> int:
+    """Return stored progress without triggering Streamlit dynamic attributes."""
+
+    try:
+        return _GENERATION_PROGRESS_PERCENT_BY_OBJECT[progress]
+    except KeyError:
+        return 0
+    except TypeError:
+        return _GENERATION_PROGRESS_PERCENT_BY_ID.get(id(progress), 0)
+
+
+def _set_generation_progress_percent(progress, percent: int) -> None:
+    """Remember progress without relying on Streamlit dynamic attributes."""
+
+    try:
+        _GENERATION_PROGRESS_PERCENT_BY_OBJECT[progress] = percent
+    except TypeError:
+        _GENERATION_PROGRESS_PERCENT_BY_ID[id(progress)] = percent
+
+    try:
+        progress._generation_progress_percent = percent
+    except Exception:
+        pass
+
+
 def _advance_generation_progress(progress, percent: int) -> None:
     """Smoothly advance the generation progress bar to the target percentage."""
 
-    current_percent = getattr(progress, "_generation_progress_percent", 0)
+    current_percent = _get_generation_progress_percent(progress)
     if percent <= current_percent:
         progress.progress(percent)
+        _set_generation_progress_percent(progress, percent)
         return
 
     for next_percent in range(current_percent + 1, percent + 1):
         progress.progress(next_percent)
         sleep(GENERATION_PROGRESS_STEP_DELAY_SECONDS)
 
-    progress._generation_progress_percent = percent
+    _set_generation_progress_percent(progress, percent)
 
 
 def _update_generation_progress(status, progress, message: str, percent: int) -> None:
@@ -89,19 +118,14 @@ def run_generation_pipeline(
     mock_similarity: bool,
     status,
     progress,
-    progress_state: dict[str, int] | None = None,
 ) -> dict[str, object]:
     """Run report generation in visible, client-friendly stages."""
-
-    if progress_state is None:
-        progress_state = {"percent": 0}
 
     _update_generation_progress(
         status,
         progress,
         "1. Reading application documents — combining pasted text and uploaded files.",
         8,
-        progress_state,
     )
     application_docs = combine_pasted_and_uploaded(app_text, app_uploads)
     if not application_docs:
@@ -113,7 +137,6 @@ def run_generation_pipeline(
         progress,
         "2. Extracting application facts — identifying title, applicant, intervention/product, population, study design, TRL/stage, sample size, endpoints, PPIE, inclusion, health economics, regulatory plan, work packages and uncertainties.",
         20,
-        progress_state,
     )
     facts = extract_application_facts(application_docs)
 
@@ -122,7 +145,6 @@ def run_generation_pipeline(
         progress,
         "3. Reading optional funding call guidance — combining pasted guidance and uploaded call documents.",
         32,
-        progress_state,
     )
     specific_text = _runtime_guidance_from_inputs(call_text, call_uploads)
 
@@ -131,7 +153,6 @@ def run_generation_pipeline(
         progress,
         "4. Selecting relevant guidance — checking PDA/RSS playbook relevance and building the baseline requirement bank.",
         44,
-        progress_state,
     )
     include_pda = detects_pda_relevance(
         specific_text,
@@ -150,7 +171,6 @@ def run_generation_pipeline(
         progress,
         "5. Building the checklist review — matching application evidence to requirements, flagging missing/weak/contradictory evidence and applying hard validation rules.",
         58,
-        progress_state,
     )
     checklist = build_checklist(facts, baseline, specific_reqs)
 
@@ -159,7 +179,6 @@ def run_generation_pipeline(
         progress,
         "6. Building the RAG dashboard — summarising Red/Amber/Green performance by review area and collecting validation warnings.",
         70,
-        progress_state,
     )
     dashboard = build_rag_dashboard(checklist, facts)
 
@@ -168,7 +187,6 @@ def run_generation_pipeline(
         progress,
         "7. Prioritising missing evidence — identifying the highest-priority gaps and recommended next actions.",
         80,
-        progress_state,
     )
     priority = render_priority_missing_evidence(checklist, dashboard, facts)
 
@@ -177,7 +195,6 @@ def run_generation_pipeline(
         progress,
         f"8. Running similarity/novelty check — {_similarity_progress_message(run_similarity, mock_similarity, settings)}",
         88,
-        progress_state,
     )
     similarity = run_similarity_service(
         facts,
@@ -192,7 +209,6 @@ def run_generation_pipeline(
         progress,
         "9. Preparing report tabs — Summary, Checklist Report, RAG Dashboard, Similarity Check, Priority Missing Evidence and Raw JSON.",
         96,
-        progress_state,
     )
 
     return {
@@ -204,7 +220,6 @@ def run_generation_pipeline(
         "dashboard": dashboard,
         "priority": priority,
         "similarity": similarity,
-        "progress_state": progress_state,
     }
 
 
@@ -262,7 +277,6 @@ def main() -> None:
     )
     stage_status = status.empty()
     progress = st.progress(0)
-    progress_state = {"percent": 0}
 
     try:
         generation = run_generation_pipeline(
@@ -275,7 +289,6 @@ def main() -> None:
             mock_similarity=mock_similarity,
             status=stage_status,
             progress=progress,
-            progress_state=progress_state,
         )
     except Exception as exc:
         status.write(f"Generation stopped at this stage: {exc}")
