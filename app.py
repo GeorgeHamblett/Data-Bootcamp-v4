@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from html import escape
 from time import sleep
+from weakref import WeakKeyDictionary
 
 from application_facts import extract_application_facts
 from checklist_engine import build_checklist
@@ -32,6 +33,8 @@ from similarity.epo_ops import check_epo_credentials
 APP_TITLE = "RSS/NIHR Funding Application Checklist Assistant"
 NO_SPECIFIC_CALL_GUIDANCE_MESSAGE = "No specific funding call guidance provided; review uses built-in NIHR domestic guidance and RSS PDA playbook guidance."
 GENERATION_PROGRESS_STEP_DELAY_SECONDS = 0.04
+_GENERATION_PROGRESS_PERCENT_BY_OBJECT: WeakKeyDictionary[object, int] = WeakKeyDictionary()
+_GENERATION_PROGRESS_PERCENT_BY_ID: dict[int, int] = {}
 
 
 def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
@@ -39,19 +42,45 @@ def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
     return "\n\n".join(doc.text for doc in docs)
 
 
+def _get_generation_progress_percent(progress) -> int:
+    """Return stored progress without triggering Streamlit dynamic attributes."""
+
+    try:
+        return _GENERATION_PROGRESS_PERCENT_BY_OBJECT[progress]
+    except KeyError:
+        return 0
+    except TypeError:
+        return _GENERATION_PROGRESS_PERCENT_BY_ID.get(id(progress), 0)
+
+
+def _set_generation_progress_percent(progress, percent: int) -> None:
+    """Remember progress without relying on Streamlit dynamic attributes."""
+
+    try:
+        _GENERATION_PROGRESS_PERCENT_BY_OBJECT[progress] = percent
+    except TypeError:
+        _GENERATION_PROGRESS_PERCENT_BY_ID[id(progress)] = percent
+
+    try:
+        progress._generation_progress_percent = percent
+    except Exception:
+        pass
+
+
 def _advance_generation_progress(progress, percent: int) -> None:
     """Smoothly advance the generation progress bar to the target percentage."""
 
-    current_percent = getattr(progress, "_generation_progress_percent", 0)
+    current_percent = _get_generation_progress_percent(progress)
     if percent <= current_percent:
         progress.progress(percent)
+        _set_generation_progress_percent(progress, percent)
         return
 
     for next_percent in range(current_percent + 1, percent + 1):
         progress.progress(next_percent)
         sleep(GENERATION_PROGRESS_STEP_DELAY_SECONDS)
 
-    progress._generation_progress_percent = percent
+    _set_generation_progress_percent(progress, percent)
 
 
 def _update_generation_progress(status, progress, message: str, percent: int) -> None:

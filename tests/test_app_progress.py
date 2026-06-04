@@ -68,6 +68,17 @@ def test_app_uses_visible_status_and_progress_workflow() -> None:
         assert stage in APP_SOURCE
 
 
+def test_generation_progress_handles_streamlit_dynamic_attributes(monkeypatch) -> None:
+    monkeypatch.setattr(app, "sleep", lambda seconds: None)
+    progress = FakeStreamlitLikeProgress()
+
+    app._advance_generation_progress(progress, 3)
+    app._advance_generation_progress(progress, 5)
+
+    assert progress.values == [1, 2, 3, 4, 5]
+    assert app._get_generation_progress_percent(progress) == 5
+
+
 def test_generation_progress_update_calls_keep_four_argument_signature() -> None:
     tree = ast.parse(APP_SOURCE)
     update_calls = [
