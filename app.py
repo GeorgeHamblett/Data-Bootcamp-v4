@@ -39,9 +39,12 @@ def _runtime_guidance_from_inputs(pasted: str, uploads) -> str:
 
 
 def _update_generation_progress(status, progress, message: str, percent: int) -> None:
-    """Write a client-friendly generation update and advance the progress bar."""
+    """Replace the visible generation stage and advance the progress bar."""
 
-    status.write(message)
+    if hasattr(status, "markdown"):
+        status.markdown(f'<div class="generation-stage">{message}</div>', unsafe_allow_html=True)
+    else:
+        status.write(message)
     progress.progress(percent)
 
 
@@ -82,12 +85,7 @@ def run_generation_pipeline(
     application_docs = combine_pasted_and_uploaded(app_text, app_uploads)
     if not application_docs:
         raise ValueError("The Application is required. Paste text or upload .docx, .pdf, .txt or .xlsx files.")
-    _update_generation_progress(
-        status,
-        progress,
-        "Application documents found. The app will use them locally to build the checklist evidence review.",
-        12,
-    )
+    progress.progress(12)
 
     _update_generation_progress(
         status,
@@ -104,10 +102,6 @@ def run_generation_pipeline(
         32,
     )
     specific_text = _runtime_guidance_from_inputs(call_text, call_uploads)
-    if specific_text.strip():
-        status.write("Specific funding call guidance found and will be added to the built-in NIHR/RSS guidance.")
-    else:
-        status.write("No specific funding call guidance supplied; using the built-in NIHR domestic guidance and RSS PDA playbook guidance where relevant.")
 
     _update_generation_progress(
         status,
@@ -219,6 +213,24 @@ def main() -> None:
         return
 
     status = st.status("Generating checklist report...", expanded=True)
+    status.markdown(
+        """
+        <style>
+        .generation-stage {
+            animation: generation-stage-fade 0.45s ease-in-out;
+            font-size: 1rem;
+            line-height: 1.45;
+            padding: 0.25rem 0;
+        }
+        @keyframes generation-stage-fade {
+            from { opacity: 0; transform: translateY(0.25rem); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    stage_status = status.empty()
     progress = st.progress(0)
 
     try:
@@ -230,7 +242,7 @@ def main() -> None:
             settings=settings,
             run_similarity=run_similarity,
             mock_similarity=mock_similarity,
-            status=status,
+            status=stage_status,
             progress=progress,
         )
     except Exception as exc:

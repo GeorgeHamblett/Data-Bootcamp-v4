@@ -16,6 +16,9 @@ class FakeStatus:
         self.messages: list[str] = []
         self.updates: list[dict[str, object]] = []
 
+    def markdown(self, message: str, unsafe_allow_html: bool = False) -> None:
+        self.messages.append(message)
+
     def write(self, message: str) -> None:
         self.messages.append(message)
 
@@ -37,6 +40,8 @@ def test_app_uses_visible_status_and_progress_workflow() -> None:
     assert "_update_generation_progress" in APP_SOURCE
     assert "Checklist report generated" in APP_SOURCE
     assert "Checklist report generation failed" in APP_SOURCE
+    assert "stage_status = status.empty()" in APP_SOURCE
+    assert "generation-stage-fade" in APP_SOURCE
     assert "st.spinner" not in APP_SOURCE
 
     for stage in [
@@ -157,6 +162,10 @@ def test_generation_pipeline_calls_main_functions_in_order(monkeypatch) -> None:
     ]
     assert result["priority"] == "priority"
     assert progress.values == [8, 12, 20, 32, 44, 58, 70, 80, 88, 96]
+    assert len(status.messages) == 9
+    assert all("generation-stage" in message for message in status.messages)
+    assert "Application documents found" not in "\n".join(status.messages)
+    assert "No specific funding call guidance supplied" not in "\n".join(status.messages)
 
 
 def test_similarity_checking_remains_optional_and_privacy_gated() -> None:
