@@ -68,6 +68,21 @@ def test_app_uses_visible_status_and_progress_workflow() -> None:
         assert stage in APP_SOURCE
 
 
+def test_generation_progress_update_calls_keep_four_argument_signature() -> None:
+    tree = ast.parse(APP_SOURCE)
+    update_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_update_generation_progress"
+    ]
+
+    assert update_calls
+    assert all(len(call.args) == 4 for call in update_calls)
+    assert "progress_state=" not in APP_SOURCE
+
+
 def test_generation_still_defines_the_same_six_report_tabs() -> None:
     tree = ast.parse(APP_SOURCE)
     tab_calls = [
